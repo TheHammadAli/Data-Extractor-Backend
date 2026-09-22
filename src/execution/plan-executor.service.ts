@@ -140,6 +140,18 @@ export class PlanExecutorService {
   private async executeLogin(runId: string, page: Page): Promise<void> {
     const creds = this.credentials.peek(runId);
     if (!creds) {
+      // Pausing for a human to log in only works when that human can see the browser. On a server
+      // it would wait forever, so carry on unauthenticated and say so.
+      if (this.env.BROWSER_MODE === 'launch') {
+        await this.events.emit({
+          runId,
+          type: 'STEP_FAILED',
+          message:
+            'No login credentials were provided and this backend runs its own browser, so there is ' +
+            'nothing to log into by hand — continuing without an authenticated session.',
+        });
+        return;
+      }
       await this.pauseForManualLogin(runId, page);
       return;
     }

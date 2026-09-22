@@ -24,3 +24,25 @@ describe('BrowserSessionManager without a launchable browser', () => {
     await expect(manager.attach('run-1')).rejects.toThrow(/No CDP-enabled browser is running/);
   }, 30000);
 });
+
+describe('BrowserSessionManager in launch mode', () => {
+  const env = {
+    BROWSER_MODE: 'launch',
+    BROWSER_HEADLESS: true,
+    BROWSER_CDP_ENDPOINT: 'http://127.0.0.1:9',
+  } as never;
+
+  it('runs its own browser instead of demanding the user have one', async () => {
+    const manager = new BrowserSessionManager(env);
+    try {
+      expect(await manager.isBrowserAvailable()).toBe(true);
+
+      const { page } = await manager.attach('run-launch');
+      await page.setContent('<h1>hello from the server</h1>');
+
+      expect(await page.textContent('h1')).toBe('hello from the server');
+    } finally {
+      await manager.close('run-launch');
+    }
+  }, 60000);
+});

@@ -8,6 +8,12 @@ export interface AppEnv {
   OPENROUTER_API_KEY?: string;
   AI_MODEL?: string;
   BROWSER_HEADLESS: boolean;
+  /**
+   * "attach" drives the user's own browser over CDP (local use, keeps their logged-in session).
+   * "launch" starts a browser of its own — the only option on a hosted server, where there is no
+   * user browser to attach to and no screen to log in on.
+   */
+  BROWSER_MODE: 'attach' | 'launch';
   /** CDP endpoint of the user's own Chrome, started with --remote-debugging-port. */
   BROWSER_CDP_ENDPOINT?: string;
   DEFAULT_LISTING_LIMIT: number;
@@ -46,6 +52,7 @@ export function loadAppEnv(): AppEnv {
     OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY || undefined,
     AI_MODEL: process.env.AI_MODEL || undefined,
     BROWSER_HEADLESS: process.env.BROWSER_HEADLESS === 'true',
+    BROWSER_MODE: process.env.BROWSER_MODE === 'launch' ? 'launch' : 'attach',
     BROWSER_CDP_ENDPOINT: process.env.BROWSER_CDP_ENDPOINT || undefined,
     DEFAULT_LISTING_LIMIT: Number(process.env.DEFAULT_LISTING_LIMIT ?? 50),
     CSV_STORAGE_DIR: process.env.CSV_STORAGE_DIR ?? './storage/csv',

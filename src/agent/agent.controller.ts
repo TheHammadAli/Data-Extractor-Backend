@@ -30,7 +30,7 @@ export class AgentController {
 
   @Get('browser/status')
   async browserStatus() {
-    return { open: await this.sessions.isBrowserAvailable() };
+    return { open: await this.sessions.isBrowserAvailable(), mode: this.sessions.mode };
   }
 
   @Post('browser/close')

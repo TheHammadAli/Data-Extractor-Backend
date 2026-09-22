@@ -113,9 +113,14 @@ export class BrowserSessionManager implements OnModuleDestroy {
     );
   }
 
-  /** True when some CDP-enabled browser is reachable and usable. */
+  /** True when some CDP-enabled browser is reachable and usable. Server mode always has one. */
   async isBrowserAvailable(): Promise<boolean> {
+    if (this.env.BROWSER_MODE === 'launch') return true;
     return !!(await this.findAttachableEndpoint());
+  }
+
+  get mode(): 'attach' | 'launch' {
+    return this.env.BROWSER_MODE;
   }
 
   /** Closes only the browser this service spawned; a user-run browser is left alone. */
@@ -144,6 +149,8 @@ export class BrowserSessionManager implements OnModuleDestroy {
     const existing = this.sessions.get(runId);
     if (existing) return { page: existing.page, how: 'existing-tab', endpoint: 'already-attached' };
 
+    if (this.env.BROWSER_MODE === 'launch') return this.launchOwnBrowser(runId);
+
     const endpoint = await this.findAttachableEndpoint();
     if (!endpoint) throw new Error(this.notAttachableMessage());
 
@@ -156,6 +163,18 @@ export class BrowserSessionManager implements OnModuleDestroy {
       how: session.matchedExistingTab ? 'existing-tab' : 'new-tab-same-session',
       endpoint,
     };
+  }
+
+  /**
+   * Server mode: no user browser exists to attach to, so run one of our own. The session is not
+   * marked `attached`, so it gets closed when the run ends.
+   */
+  private async launchOwnBrowser(runId: string): Promise<AttachResult> {
+    const browser = await chromium.launch({ headless: this.env.BROWSER_HEADLESS });
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    this.sessions.set(runId, { browser, context, page });
+    return { page, how: 'new-tab-same-session', endpoint: 'launched' };
   }
 
   private async attachTo(targetUrl?: string): Promise<(Session & { matchedExistingTab: boolean }) | null> {
