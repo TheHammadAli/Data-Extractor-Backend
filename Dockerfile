@@ -7,7 +7,10 @@ FROM mcr.microsoft.com/playwright:v1.63.0-jammy
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci
+# --legacy-peer-deps is required, not cosmetic: npm 11's strict peer resolver crashes on this
+# dependency set (arborist "#loadPeerSet ... edgesOut of null"), so the lockfile is generated in
+# legacy mode and `npm ci` has to read it the same way or it reports packages as missing.
+RUN npm ci --legacy-peer-deps
 
 COPY . .
 RUN npx prisma generate && npm run build
