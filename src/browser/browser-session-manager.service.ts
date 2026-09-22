@@ -63,22 +63,54 @@ export class BrowserSessionManager implements OnModuleDestroy {
     // Detached on purpose: a Playwright-launched browser is a child wired to this process by a
     // pipe and dies on every backend restart, throwing away the login the user just did.
     const userDataDir = resolve(process.cwd(), MANAGED_PROFILE_DIR);
-    const child = spawn(
-      chromium.executablePath(),
-      [
-        `--remote-debugging-port=${MANAGED_CDP_PORT}`,
-        `--user-data-dir=${userDataDir}`,
-        '--no-first-run',
-        '--no-default-browser-check',
-        url ?? 'about:blank',
-      ],
-      { detached: true, stdio: 'ignore' },
-    );
+    let spawnError: Error | null = null;
+
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(
+        this.browserExecutablePath(),
+        [
+          `--remote-debugging-port=${MANAGED_CDP_PORT}`,
+          `--user-data-dir=${userDataDir}`,
+          '--no-first-run',
+          '--no-default-browser-check',
+          url ?? 'about:blank',
+        ],
+        { detached: true, stdio: 'ignore' },
+      );
+    } catch (err) {
+      throw new Error(this.cannotStartMessage(err as Error));
+    }
+
+    // Without this listener a failed spawn (no Chromium installed — the usual case on a hosted
+    // server) emits an unhandled 'error' event, which takes the whole backend process down and
+    // shows up in the browser as "Failed to fetch" with no response at all.
+    child.on('error', (err) => {
+      spawnError = err;
+      this.logger.error(`Could not start a browser: ${err.message}`);
+    });
     child.unref();
 
-    if (!(await this.waitForEndpoint(`http://127.0.0.1:${MANAGED_CDP_PORT}`))) {
-      throw new Error('The browser did not finish starting up. Please try again.');
+    const endpoint = `http://127.0.0.1:${MANAGED_CDP_PORT}`;
+    if (!(await this.waitForEndpoint(endpoint, 20000, () => spawnError !== null))) {
+      const failure = spawnError as Error | null;
+      throw new Error(
+        failure ? this.cannotStartMessage(failure) : 'The browser did not finish starting up. Please try again.',
+      );
     }
+  }
+
+  /** Overridable so tests can point at a path that cannot be launched. */
+  protected browserExecutablePath(): string {
+    return chromium.executablePath();
+  }
+
+  private cannotStartMessage(err: Error): string {
+    return (
+      `Could not start a browser on the machine running this backend (${err.message}). ` +
+      'The agent drives a real browser, so the backend has to run on your own computer — ' +
+      'a hosted server has no browser and no screen for you to log in on.'
+    );
   }
 
   /** True when some CDP-enabled browser is reachable and usable. */
@@ -184,10 +216,11 @@ export class BrowserSessionManager implements OnModuleDestroy {
     }
   }
 
-  private async waitForEndpoint(endpoint: string, timeoutMs = 20000): Promise<boolean> {
+  private async waitForEndpoint(endpoint: string, timeoutMs = 20000, abort?: () => boolean): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       if (await this.probe(endpoint)) return true;
+      if (abort?.()) return false;
       await new Promise((r) => setTimeout(r, 300));
     }
     return false;
