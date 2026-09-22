@@ -1,4 +1,4 @@
-import { Body, Controller, Get, NotFoundException, Param, Post, Sse } from '@nestjs/common';
+import { Body, Controller, Get, NotFoundException, Param, Post, ServiceUnavailableException, Sse } from '@nestjs/common';
 import type { Observable } from 'rxjs';
 import { BrowserSessionManager } from '../browser/browser-session-manager.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -24,7 +24,13 @@ export class AgentController {
   /** Opens a CDP-enabled browser for users who'd rather not add the flags to Chrome themselves. */
   @Post('browser/open')
   async openBrowser(@Body() dto: OpenBrowserDto) {
-    await this.sessions.openManagedBrowser(dto.url);
+    try {
+      await this.sessions.openManagedBrowser(dto.url);
+    } catch (err) {
+      // Nest turns a plain Error into a bare "Internal server error", hiding the one thing worth
+      // saying — that this machine has no browser to start.
+      throw new ServiceUnavailableException(err instanceof Error ? err.message : 'Could not start a browser');
+    }
     return { opened: true };
   }
 
