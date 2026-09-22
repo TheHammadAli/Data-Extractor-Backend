@@ -1,0 +1,26 @@
+# Render blueprint. Deploy via Render → New → Blueprint, pointed at this repo.
+#
+# The runtime MUST be docker: Render's native Node environment has no Chromium and ignores the
+# Dockerfile, which leaves the agent with no browser to drive.
+services:
+  - type: web
+    name: data-extractor-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /
+    envVars:
+      # Prompted for on deploy — never stored in the repo.
+      - key: DATABASE_URL
+        sync: false
+      - key: FRONTEND_ORIGIN
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: AI_PROVIDER
+        value: openrouter
+      # No user browser and no screen on a server, so the agent runs its own headless one.
+      - key: BROWSER_MODE
+        value: launch
+      - key: BROWSER_HEADLESS
+        value: "true"
