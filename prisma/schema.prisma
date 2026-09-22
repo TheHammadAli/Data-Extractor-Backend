@@ -1,0 +1,98 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RunStatus {
+  PENDING
+  PLANNING
+  RUNNING
+  PAUSED_CAPTCHA
+  PAUSED_OTP
+  PAUSED_LOGIN
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum RunEventType {
+  LOG
+  STEP_START
+  STEP_COMPLETE
+  STEP_FAILED
+  CHECKLIST_UPDATE
+  COUNTER_UPDATE
+  PAUSE
+  RESUMED
+  ERROR
+}
+
+/// One "Start Agent" submission. Deliberately has no username/password column —
+/// credentials are handled in-memory only (see CredentialsService) and never persisted.
+model Run {
+  id                String    @id @default(cuid())
+  targetUrl         String
+  instructionsText  String
+  fieldList         Json // string[] derived by the AI from the instructions; drives CSV columns
+  planJson          Json? // abstract plan, stored for audit/debugging only
+  status            RunStatus @default(PENDING)
+  currentStepLabel  String?
+  progressCurrent   Int       @default(0)
+  progressTotal     Int       @default(0)
+  extractedCount    Int       @default(0)
+  failedCount       Int       @default(0)
+  errorMessage      String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  startedAt         DateTime?
+  completedAt       DateTime?
+
+  events   RunEvent[]
+  listings ExtractedListing[]
+  csvFile  CsvFile?
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model RunEvent {
+  id        String       @id @default(cuid())
+  runId     String
+  run       Run          @relation(fields: [runId], references: [id], onDelete: Cascade)
+  type      RunEventType
+  message   String
+  metadata  Json?
+  createdAt DateTime     @default(now())
+
+  @@index([runId, createdAt])
+}
+
+model ExtractedListing {
+  id         String   @id @default(cuid())
+  runId      String
+  run        Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
+  listingUrl String
+  listingId  String?
+  dedupeKey  String
+  data       Json // { [fieldName]: normalizedValue } — flexible, driven by Run.fieldList
+  createdAt  DateTime @default(now())
+
+  @@unique([runId, dedupeKey])
+  @@index([runId, createdAt])
+}
+
+model CsvFile {
+  id            String   @id @default(cuid())
+  runId         String   @unique
+  run           Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
+  filename      String
+  filePath      String
+  columns       Json // ordered column list actually written
+  recordCount   Int
+  fileSizeBytes Int
+  createdAt     DateTime @default(now())
+}
