@@ -22,10 +22,23 @@ function requireEnv(key: string): string {
   return value;
 }
 
+/**
+ * Reduces whatever was configured to a bare origin. CORS compares origins exactly, so pasting a
+ * full page URL ("https://app.vercel.app/agent") into FRONTEND_ORIGIN makes every request fail
+ * with an Access-Control-Allow-Origin that can never match.
+ */
+function toOrigin(value: string): string {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return value.replace(/\/+$/, '');
+  }
+}
+
 export function loadAppEnv(): AppEnv {
   return {
     PORT: Number(process.env.PORT ?? 3001),
-    FRONTEND_ORIGIN: process.env.FRONTEND_ORIGIN ?? 'http://localhost:3000',
+    FRONTEND_ORIGIN: toOrigin(process.env.FRONTEND_ORIGIN ?? 'http://localhost:3000'),
     DATABASE_URL: requireEnv('DATABASE_URL'),
     AI_PROVIDER: (process.env.AI_PROVIDER as 'mock' | 'anthropic' | 'gemini' | 'openrouter') ?? 'mock',
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || undefined,
