@@ -41,6 +41,20 @@ function toOrigin(value: string): string {
   }
 }
 
+function resolveBrowserMode(): 'attach' | 'launch' {
+  return process.env.BROWSER_MODE === 'launch' ? 'launch' : 'attach';
+}
+
+/**
+ * Headful is the right default locally (a human watches the run and solves CAPTCHAs), but a server
+ * has no display at all — Chromium exits with "Missing X server or $DISPLAY". So launch mode, which
+ * only exists for servers, defaults to headless.
+ */
+function resolveHeadless(): boolean {
+  if (process.env.BROWSER_HEADLESS === undefined) return resolveBrowserMode() === 'launch';
+  return process.env.BROWSER_HEADLESS === 'true';
+}
+
 export function loadAppEnv(): AppEnv {
   return {
     PORT: Number(process.env.PORT ?? 3001),
@@ -51,8 +65,8 @@ export function loadAppEnv(): AppEnv {
     GEMINI_API_KEY: process.env.GEMINI_API_KEY || undefined,
     OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY || undefined,
     AI_MODEL: process.env.AI_MODEL || undefined,
-    BROWSER_HEADLESS: process.env.BROWSER_HEADLESS === 'true',
-    BROWSER_MODE: process.env.BROWSER_MODE === 'launch' ? 'launch' : 'attach',
+    BROWSER_HEADLESS: resolveHeadless(),
+    BROWSER_MODE: resolveBrowserMode(),
     BROWSER_CDP_ENDPOINT: process.env.BROWSER_CDP_ENDPOINT || undefined,
     DEFAULT_LISTING_LIMIT: Number(process.env.DEFAULT_LISTING_LIMIT ?? 50),
     CSV_STORAGE_DIR: process.env.CSV_STORAGE_DIR ?? './storage/csv',

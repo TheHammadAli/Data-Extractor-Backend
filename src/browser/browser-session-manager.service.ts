@@ -170,11 +170,25 @@ export class BrowserSessionManager implements OnModuleDestroy {
    * marked `attached`, so it gets closed when the run ends.
    */
   private async launchOwnBrowser(runId: string): Promise<AttachResult> {
-    const browser = await chromium.launch({ headless: this.env.BROWSER_HEADLESS });
+    const browser = await this.launchChromium();
     const context = await browser.newContext();
     const page = await context.newPage();
     this.sessions.set(runId, { browser, context, page });
     return { page, how: 'new-tab-same-session', endpoint: 'launched' };
+  }
+
+  /**
+   * A headed browser cannot start where there is no display ("Missing X server or $DISPLAY"), and
+   * that is configuration nobody can act on mid-run — so fall back to headless rather than failing.
+   */
+  private async launchChromium(): Promise<Browser> {
+    try {
+      return await chromium.launch({ headless: this.env.BROWSER_HEADLESS });
+    } catch (err) {
+      if (this.env.BROWSER_HEADLESS) throw err;
+      this.logger.warn(`Could not start a headed browser (${(err as Error).message}); retrying headless.`);
+      return chromium.launch({ headless: true });
+    }
   }
 
   private async attachTo(targetUrl?: string): Promise<(Session & { matchedExistingTab: boolean }) | null> {

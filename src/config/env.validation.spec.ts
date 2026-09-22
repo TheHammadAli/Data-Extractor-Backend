@@ -28,3 +28,35 @@ describe('loadAppEnv FRONTEND_ORIGIN', () => {
     expect(loadAppEnv().FRONTEND_ORIGIN).toBe('http://localhost:3000');
   });
 });
+
+describe('loadAppEnv browser mode and headless', () => {
+  const original = { ...process.env };
+
+  beforeEach(() => {
+    process.env.DATABASE_URL = 'postgresql://user:pass@localhost:5432/db';
+    delete process.env.BROWSER_HEADLESS;
+    delete process.env.BROWSER_MODE;
+  });
+
+  afterEach(() => {
+    process.env = { ...original };
+  });
+
+  it('is headless by default in launch mode — a server has no display', () => {
+    process.env.BROWSER_MODE = 'launch';
+
+    expect(loadAppEnv().BROWSER_HEADLESS).toBe(true);
+  });
+
+  it('is headful by default in attach mode, so the user can watch and log in', () => {
+    expect(loadAppEnv().BROWSER_MODE).toBe('attach');
+    expect(loadAppEnv().BROWSER_HEADLESS).toBe(false);
+  });
+
+  it('still honours an explicit setting', () => {
+    process.env.BROWSER_MODE = 'launch';
+    process.env.BROWSER_HEADLESS = 'false';
+
+    expect(loadAppEnv().BROWSER_HEADLESS).toBe(false);
+  });
+});
