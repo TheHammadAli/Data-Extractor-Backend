@@ -20,6 +20,10 @@ import { RunControlService } from './run-control.service.js';
 const MAX_PAGES = 20;
 const REVEAL_POLLS = 10;
 const REVEAL_POLL_INTERVAL_MS = 500;
+const OPEN_ATTEMPTS = 3;
+/** Generous because a hosted container is slower than a desktop and pages here are heavy. */
+const OPEN_TIMEOUT_MS = 45000;
+const OPEN_RETRY_DELAY_MS = 2000;
 const RELATED_SECTION =
   /^\s*(related ads|similar ads|related listings|similar listings|you may also like|recommended for you|more ads from (this )?seller|people also viewed)\b/im;
 
@@ -422,24 +426,38 @@ export class PlanExecutorService {
    * different ad, an interstitial) must never be mistaken for the queued listing.
    */
   private async openQueuedListing(runId: string, page: Page, url: string): Promise<boolean> {
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
-      const navigated = await page
-        .goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 })
-        .then(() => true)
-        .catch(() => false);
+    let reason = '';
 
-      if (navigated && this.isSamePage(page.url(), url)) return true;
+    for (let attempt = 1; attempt <= OPEN_ATTEMPTS; attempt += 1) {
+      const failure = await page
+        .goto(url, { waitUntil: 'domcontentloaded', timeout: OPEN_TIMEOUT_MS })
+        .then(() => null)
+        .catch((err: Error) => err);
 
-      if (navigated) {
+      if (!failure) {
+        if (this.isSamePage(page.url(), url)) return true;
+        reason = `redirected to ${page.url()}`;
         await this.events.emit({
           runId,
           type: 'LOG',
           message: `Landed on ${page.url()} instead of the queued listing — re-opening the exact URL.`,
         });
+      } else {
+        // Swallowing this hid why listings would not open: a timeout, a refused connection and a
+        // site blocking the server's IP all looked identical from the outside.
+        reason = failure.message.split('\n')[0];
       }
+
+      // Also eases rate limiting, which is a likely cause when the first listing opens and the
+      // ones after it do not.
+      if (attempt < OPEN_ATTEMPTS) await page.waitForTimeout(OPEN_RETRY_DELAY_MS * attempt);
     }
 
-    await this.events.emit({ runId, type: 'STEP_FAILED', message: `Could not open queued listing: ${url}` });
+    await this.events.emit({
+      runId,
+      type: 'STEP_FAILED',
+      message: `Could not open queued listing: ${url}${reason ? ` — ${reason}` : ''}`,
+    });
     await this.bumpCounters(runId, { saved: false });
     return false;
   }
