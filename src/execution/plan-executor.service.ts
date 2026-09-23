@@ -89,7 +89,7 @@ export class PlanExecutorService {
           // nonsense from them.
           await this.pauseForManualStep(
             runId,
-            `Could not find "${target}" on this page. Open it yourself in the browser, then click Continue.`,
+            `Could not find "${target}" on this page.`,
           );
           return;
         }
@@ -119,7 +119,7 @@ export class PlanExecutorService {
         if (!result.success) {
           await this.pauseForManualStep(
             runId,
-            `Could not select "${target}". Set it yourself in the browser, then click Continue.`,
+            `Could not select "${target}".`,
           );
           return;
         }
@@ -132,7 +132,24 @@ export class PlanExecutorService {
         if (result.success) await page.keyboard.press('Enter').catch(() => undefined);
         return;
       }
+      case 'click_and_extract': {
+        // Before the listing loop there is nothing to extract from, so this is a navigation click
+        // the instructions asked for ("click Login with Email"). Silently skipping it made the
+        // agent look like it ignored the prompt, and broke two-stage logins.
+        const target = step.target ?? step.targetDescription ?? '';
+        if (!target) return;
+        const result = await this.grounded.groundAndAct(page, target, 'click');
+        await page.waitForLoadState('domcontentloaded').catch(() => undefined);
+        await this.events.emit({
+          runId,
+          type: result.success ? 'LOG' : 'STEP_FAILED',
+          message: result.success ? `Clicked "${target}"` : `Could not click "${target}" — continuing`,
+        });
+        return;
+      }
       default:
+        // extract/normalize/save_csv belong to the listing loop or the CSV step, not to setup.
+        this.logger.debug(`Setup step "${step.type}" has no action before the listing loop`);
         return;
     }
   }
@@ -156,7 +173,21 @@ export class PlanExecutorService {
       return;
     }
 
-    const usernameResult = await this.grounded.groundAndAct(page, 'username or email input field', 'type', creds.username);
+    let usernameResult = await this.grounded.groundAndAct(page, 'username or email input field', 'type', creds.username);
+    if (!usernameResult.success) {
+      // Sites often hide the email form behind a chooser ("Login with Email", "Continue with
+      // email"), so there is no field to type into until that is clicked.
+      const chooser = await this.grounded.groundAndAct(
+        page,
+        'login with email option, continue with email button, or use email instead link',
+        'click',
+      );
+      if (chooser.success) {
+        await page.waitForTimeout(700);
+        usernameResult = await this.grounded.groundAndAct(page, 'username or email input field', 'type', creds.username);
+      }
+    }
+
     const passwordResult = await this.grounded.groundAndAct(page, 'password input field', 'type', creds.password);
     const submitResult = await this.grounded.groundAndAct(page, 'login or sign in submit button', 'click');
 
@@ -164,9 +195,11 @@ export class PlanExecutorService {
     await page.waitForTimeout(1000);
     await this.handleChallengeIfPresent(runId, page);
 
-    this.credentials.wipe(runId);
-
     const success = usernameResult.success && passwordResult.success && submitResult.success;
+    // Kept on failure so a later login step in the same plan can retry — the model often emits two
+    // ("click the login option", "complete the login"), and wiping here left the second with none.
+    if (success) this.credentials.wipe(runId);
+
     await this.events.emit({
       runId,
       type: success ? 'CHECKLIST_UPDATE' : 'STEP_FAILED',
@@ -209,18 +242,25 @@ export class PlanExecutorService {
 
   /**
    * Hands control back to the user for one step, then carries on from wherever they left the page.
+   *
    * Impossible on a server: the browser is not on the user's screen, so asking them to fix the page
-   * by hand just means the run continues from the wrong page and extracts nonsense. Fail instead.
+   * by hand would just continue from the wrong page and extract nonsense. The run fails there, and
+   * the message must not mention Continue — there is no Continue button on a failed run.
    */
-  private async pauseForManualStep(runId: string, message: string): Promise<void> {
+  private async pauseForManualStep(runId: string, problem: string): Promise<void> {
     if (this.env.BROWSER_MODE === 'launch') {
       throw new Error(
-        `${message} — but this backend runs its own browser, which you cannot see or click. ` +
-          'Run the backend on your own computer for steps that need a human, or make the ' +
-          'instructions/start URL precise enough that the agent does not need help.',
+        `${problem} This backend runs its own browser, which you cannot see or click, so no one can ` +
+          'fix it mid-run. Give a start URL that already has the category and city applied ' +
+          '(e.g. https://www.olx.com.pk/lahore_g4060673/mobile-phones_c1453) and drop those steps ' +
+          'from the instructions — or run the backend on your own computer.',
       );
     }
-    await this.events.emit({ runId, type: 'PAUSE', message });
+    await this.events.emit({
+      runId,
+      type: 'PAUSE',
+      message: `${problem} Set it yourself in the browser, then click Continue.`,
+    });
     await this.control.waitForResume(runId);
     if (this.control.isCancelled(runId)) return;
     await this.events.emit({
@@ -273,8 +313,7 @@ export class PlanExecutorService {
     if (this.isSiteRoot(resultsUrl)) {
       await this.pauseForManualStep(
         runId,
-        `The browser is on ${resultsUrl}, which is the site's home page rather than a page of ` +
-          'results. Open the listings you want, then click Continue.',
+        `The browser is on ${resultsUrl}, which is the site's home page rather than a page of results.`,
       );
       if (this.control.isCancelled(runId)) return;
       resultsUrl = page.url();
@@ -287,7 +326,7 @@ export class PlanExecutorService {
       // as listings, so an empty result usually means we're not on a results page yet.
       await this.pauseForManualStep(
         runId,
-        `No listings found on ${resultsUrl}. Open the results page you want in the browser, then click Continue.`,
+        `No listings found on ${resultsUrl}.`,
       );
       if (this.control.isCancelled(runId)) return;
       resultsUrl = page.url();

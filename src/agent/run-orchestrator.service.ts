@@ -130,6 +130,8 @@ export class RunOrchestratorService {
         metadata: { status: 'FAILED' },
       });
     } finally {
+      // A failed login keeps them for a retry within the run, so this is where they always go.
+      this.credentials.wipe(runId);
       await this.sessions.close(runId);
       this.events.complete(runId);
       this.control.clear(runId);
