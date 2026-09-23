@@ -62,6 +62,7 @@ function makeHarness(options: HarnessOptions = {}): Harness {
 
   const counters = { extractedCount: 0, failedCount: 0, progressCurrent: 0, progressTotal: 0 };
   const prisma = {
+    withRetry: <T>(operation: () => Promise<T>) => operation(),
     run: {
       // Mirrors Prisma's { increment } semantics so the counters can be asserted on.
       update: async ({ data }: { data: Record<string, { increment?: number } | undefined> }) => {

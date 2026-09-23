@@ -547,7 +547,9 @@ export class PlanExecutorService {
   }
 
   private async updateProgressTotal(runId: string, total: number): Promise<void> {
-    await this.prisma.run.update({ where: { id: runId }, data: { progressTotal: total } });
+    await this.prisma.withRetry(() =>
+      this.prisma.run.update({ where: { id: runId }, data: { progressTotal: total } }),
+    );
   }
 
   private async processListing(runId: string, page: Page, url: string, perListingSteps: PlanStep[]): Promise<void> {
@@ -588,11 +590,13 @@ export class PlanExecutorService {
     });
 
     try {
-      await this.prisma.extractedListing.upsert({
-        where: { runId_dedupeKey: { runId, dedupeKey } },
-        create: { runId, listingUrl: url, dedupeKey, data: normalized },
-        update: { data: normalized },
-      });
+      await this.prisma.withRetry(() =>
+        this.prisma.extractedListing.upsert({
+          where: { runId_dedupeKey: { runId, dedupeKey } },
+          create: { runId, listingUrl: url, dedupeKey, data: normalized },
+          update: { data: normalized },
+        }),
+      );
       await this.events.emit({ runId, type: 'LOG', message: `Extracted listing: ${normalized.title || url}` });
 
       // An empty field is worth saying out loud, but the row was still saved — counting it as a
@@ -615,14 +619,16 @@ export class PlanExecutorService {
 
   /** Extracted and failed are mutually exclusive, so they add up to the progress count. */
   private async bumpCounters(runId: string, opts: { saved: boolean }): Promise<void> {
-    const run = await this.prisma.run.update({
-      where: { id: runId },
-      data: {
-        extractedCount: opts.saved ? { increment: 1 } : undefined,
-        failedCount: opts.saved ? undefined : { increment: 1 },
-        progressCurrent: { increment: 1 },
-      },
-    });
+    const run = await this.prisma.withRetry(() =>
+      this.prisma.run.update({
+        where: { id: runId },
+        data: {
+          extractedCount: opts.saved ? { increment: 1 } : undefined,
+          failedCount: opts.saved ? undefined : { increment: 1 },
+          progressCurrent: { increment: 1 },
+        },
+      }),
+    );
     await this.events.emit({
       runId,
       type: 'COUNTER_UPDATE',
