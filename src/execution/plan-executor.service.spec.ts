@@ -4,9 +4,10 @@ import type { InstructionPlan } from '../ai/ai.types.js';
 import { NormalizationService } from '../normalization/normalization.service.js';
 
 const RESULTS_URL = 'https://www.olx.com.pk/mobile-phones_c1453/lahore';
-const QUEUED = [1, 2, 3, 4, 5].map((n) => `https://www.olx.com.pk/item/listing-${n}-iid-${n}`);
+/** Ids are 10 digits like the real ones — listings are matched by id, not by slug. */
+const QUEUED = [1, 2, 3, 4, 5].map((n) => `https://www.olx.com.pk/item/listing-${n}-iid-111944683${n}`);
 /** What a detail page would offer up as "similar/recommended" ads. */
-const UNRELATED = [9, 8].map((n) => `https://www.olx.com.pk/item/unrelated-${n}-iid-${n}`);
+const UNRELATED = [9, 8].map((n) => `https://www.olx.com.pk/item/unrelated-${n}-iid-111944699${n}`);
 
 interface Harness {
   service: PlanExecutorService;
@@ -16,6 +17,7 @@ interface Harness {
   aiPageTexts: string[];
   events: { type: string; message: string }[];
   detectCalls: string[];
+  counters: { extractedCount: number; failedCount: number; progressCurrent: number; progressTotal: number };
 }
 
 interface HarnessOptions {
@@ -61,8 +63,12 @@ function makeHarness(options: HarnessOptions = {}): Harness {
   const counters = { extractedCount: 0, failedCount: 0, progressCurrent: 0, progressTotal: 0 };
   const prisma = {
     run: {
-      update: async () => {
-        counters.progressCurrent += 1;
+      // Mirrors Prisma's { increment } semantics so the counters can be asserted on.
+      update: async ({ data }: { data: Record<string, { increment?: number } | undefined> }) => {
+        for (const key of ['extractedCount', 'failedCount', 'progressCurrent'] as const) {
+          const increment = data[key]?.increment;
+          if (increment) counters[key] += increment;
+        }
         return counters;
       },
     },
@@ -96,7 +102,7 @@ function makeHarness(options: HarnessOptions = {}): Harness {
     { isCancelled: () => false, waitForResume: async () => undefined } as never,
   );
 
-  return { service, page, upserted, rows, aiPageTexts, events, detectCalls };
+  return { service, page, upserted, rows, aiPageTexts, events, detectCalls, counters };
 }
 
 const plan: InstructionPlan = {
@@ -175,6 +181,30 @@ describe('PlanExecutorService when a step needs a human', () => {
     await h.service.run('run-10', h.page, { ...locationPlan, steps: locationPlan.steps.slice(1) }, RESULTS_URL);
 
     expect(h.events.some((e) => e.type === 'PAUSE' && e.message.includes('home page'))).toBe(true);
+  });
+});
+
+describe('PlanExecutorService counters and listing identity', () => {
+  it('counts a listing as extracted or failed, never both', async () => {
+    const h = makeHarness({ redirectFrom: QUEUED[2], redirectTo: 'https://www.olx.com.pk/item/somewhere-else-iid-777777' });
+
+    await h.service.run('run-11', h.page, plan, RESULTS_URL);
+
+    // Four opened and saved, one could not be opened — and nothing double-counted.
+    expect(h.counters.extractedCount).toBe(4);
+    expect(h.counters.failedCount).toBe(1);
+    expect(h.counters.extractedCount + h.counters.failedCount).toBe(h.counters.progressCurrent);
+  });
+
+  it('accepts a listing whose slug was rewritten but whose id is unchanged', async () => {
+    // OLX canonicalises ad URLs; the id is the part that identifies the listing.
+    const canonical = 'https://www.olx.com.pk/item/apple-iphone-13-pro-max-iid-1119446833';
+    const h = makeHarness({ redirectFrom: QUEUED[2], redirectTo: canonical });
+
+    await h.service.run('run-12', h.page, plan, RESULTS_URL);
+
+    expect(h.upserted).toEqual(QUEUED);
+    expect(h.counters.failedCount).toBe(0);
   });
 });
 

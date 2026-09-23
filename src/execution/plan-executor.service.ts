@@ -394,7 +394,22 @@ export class PlanExecutorService {
         return value;
       }
     };
-    return normalize(actual) === normalize(expected);
+    if (normalize(actual) === normalize(expected)) return true;
+
+    // Sites canonicalise listing URLs — the slug gets rewritten, the id does not. Treating that
+    // redirect as "a different listing" made real ads fail to open.
+    const actualId = this.listingIdOf(actual);
+    return !!actualId && actualId === this.listingIdOf(expected);
+  }
+
+  /** The last long number in the path, which is how listing pages identify themselves. */
+  private listingIdOf(url: string): string | null {
+    try {
+      const ids = new URL(url).pathname.match(/\d{5,}/g);
+      return ids ? ids[ids.length - 1] : null;
+    } catch {
+      return null;
+    }
   }
 
   private async gotoIfNeeded(page: Page, url: string): Promise<void> {
@@ -425,7 +440,7 @@ export class PlanExecutorService {
     }
 
     await this.events.emit({ runId, type: 'STEP_FAILED', message: `Could not open queued listing: ${url}` });
-    await this.bumpCounters(runId, { failed: true });
+    await this.bumpCounters(runId, { saved: false });
     return false;
   }
 
@@ -545,7 +560,6 @@ export class PlanExecutorService {
       }
     }
 
-    let anyFieldMissing = Object.values(data).some((v) => !v);
     const normalized = this.normalization.normalizeAll(data);
     const dedupeKey = this.dedupe.computeKey({
       listingUrl: url,
@@ -562,20 +576,32 @@ export class PlanExecutorService {
         update: { data: normalized },
       });
       await this.events.emit({ runId, type: 'LOG', message: `Extracted listing: ${normalized.title || url}` });
+
+      // An empty field is worth saying out loud, but the row was still saved — counting it as a
+      // failure made a complete run look half-broken whenever one column came back blank.
+      const empty = Object.keys(normalized).filter((key) => !normalized[key]);
+      if (empty.length > 0) {
+        await this.events.emit({
+          runId,
+          type: 'LOG',
+          message: `  …but these were empty on that page: ${empty.join(', ')}`,
+        });
+      }
+      await this.bumpCounters(runId, { saved: true });
     } catch (err) {
       this.logger.warn(`Failed to persist listing ${url}: ${err}`);
-      anyFieldMissing = true;
+      await this.events.emit({ runId, type: 'STEP_FAILED', message: `Could not save listing: ${url}` });
+      await this.bumpCounters(runId, { saved: false });
     }
-
-    await this.bumpCounters(runId, { failed: anyFieldMissing });
   }
 
-  private async bumpCounters(runId: string, opts: { failed: boolean }): Promise<void> {
+  /** Extracted and failed are mutually exclusive, so they add up to the progress count. */
+  private async bumpCounters(runId: string, opts: { saved: boolean }): Promise<void> {
     const run = await this.prisma.run.update({
       where: { id: runId },
       data: {
-        extractedCount: { increment: 1 },
-        failedCount: opts.failed ? { increment: 1 } : undefined,
+        extractedCount: opts.saved ? { increment: 1 } : undefined,
+        failedCount: opts.saved ? undefined : { increment: 1 },
         progressCurrent: { increment: 1 },
       },
     });
