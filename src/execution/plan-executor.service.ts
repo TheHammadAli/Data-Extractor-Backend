@@ -207,8 +207,19 @@ export class PlanExecutorService {
     await this.events.emit({ runId, type: 'RESUMED', message: 'Resumed after manual verification.', metadata: { status: 'RUNNING' } });
   }
 
-  /** Hands control back to the user for one step, then carries on from wherever they left the page. */
+  /**
+   * Hands control back to the user for one step, then carries on from wherever they left the page.
+   * Impossible on a server: the browser is not on the user's screen, so asking them to fix the page
+   * by hand just means the run continues from the wrong page and extracts nonsense. Fail instead.
+   */
   private async pauseForManualStep(runId: string, message: string): Promise<void> {
+    if (this.env.BROWSER_MODE === 'launch') {
+      throw new Error(
+        `${message} — but this backend runs its own browser, which you cannot see or click. ` +
+          'Run the backend on your own computer for steps that need a human, or make the ' +
+          'instructions/start URL precise enough that the agent does not need help.',
+      );
+    }
     await this.events.emit({ runId, type: 'PAUSE', message });
     await this.control.waitForResume(runId);
     if (this.control.isCancelled(runId)) return;
@@ -256,6 +267,18 @@ export class PlanExecutorService {
   private async runListingLoop(runId: string, page: Page, perListingSteps: PlanStep[], listingLimit: number): Promise<void> {
     let resultsUrl = page.url();
     const seenUrls = new Set<string>();
+
+    // A site's home page is never a results page. Its category grid is a big group of links with
+    // ids of their own, so detection happily returns 33 "listings" that are really categories.
+    if (this.isSiteRoot(resultsUrl)) {
+      await this.pauseForManualStep(
+        runId,
+        `The browser is on ${resultsUrl}, which is the site's home page rather than a page of ` +
+          'results. Open the listings you want, then click Continue.',
+      );
+      if (this.control.isCancelled(runId)) return;
+      resultsUrl = page.url();
+    }
 
     let queue = this.capAndDedupe(await this.listingCardDetector.detectListingUrls(page), seenUrls, listingLimit);
 
@@ -422,6 +445,14 @@ export class PlanExecutorService {
     }
     const squash = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
     return squash(pageText).includes(squash(value));
+  }
+
+  private isSiteRoot(url: string): boolean {
+    try {
+      return new URL(url).pathname.replace(/\//g, '') === '';
+    } catch {
+      return false;
+    }
   }
 
   private originOf(url: string): string | null {

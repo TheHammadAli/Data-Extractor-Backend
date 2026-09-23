@@ -25,10 +25,14 @@ interface HarnessOptions {
   /** Successive visible-text reads; the last one repeats. */
   texts?: string[];
   aiData?: Record<string, string>;
+  mode?: 'attach' | 'launch';
+  /** Whether grounded clicks/selects succeed. */
+  groundSucceeds?: boolean;
+  startUrl?: string;
 }
 
 function makeHarness(options: HarnessOptions = {}): Harness {
-  let currentUrl = RESULTS_URL;
+  let currentUrl = options.startUrl ?? RESULTS_URL;
   const upserted: string[] = [];
   const rows: Record<string, string>[] = [];
   const aiPageTexts: string[] = [];
@@ -78,10 +82,10 @@ function makeHarness(options: HarnessOptions = {}): Harness {
         return { data: options.aiData ?? { title: 'A title' } };
       },
     } as never,
-    { DEFAULT_LISTING_LIMIT: 50 } as never,
+    { DEFAULT_LISTING_LIMIT: 50, BROWSER_MODE: options.mode ?? 'attach' } as never,
     prisma as never,
     { emit: async (e: { type: string; message: string }) => void events.push(e) } as never,
-    { groundAndAct: async () => ({ success: true }) } as never,
+    { groundAndAct: async () => ({ success: options.groundSucceeds ?? true }) } as never,
     { readVisibleText: async () => (texts.length > 1 ? (texts.shift() as string) : texts[0]) } as never,
     { check: async () => 'none' } as never,
     listingCardDetector as never,
@@ -139,6 +143,38 @@ describe('PlanExecutorService listing queue', () => {
 
     expect(h.events.some((e) => e.type === 'PAUSE' && e.message.startsWith('No listings found'))).toBe(true);
     expect(h.upserted).toEqual(QUEUED);
+  });
+});
+
+describe('PlanExecutorService when a step needs a human', () => {
+  const locationPlan: InstructionPlan = {
+    steps: [{ type: 'select_location', value: 'Lahore' }, { type: 'find_listings' }, { type: 'extract', fields: ['title'] }],
+    fieldList: ['title'],
+    listingLimit: 5,
+  };
+
+  it('fails the run in launch mode rather than asking the user to fix a browser they cannot see', async () => {
+    const h = makeHarness({ mode: 'launch', groundSucceeds: false });
+
+    await expect(h.service.run('run-8', h.page, locationPlan, RESULTS_URL)).rejects.toThrow(/cannot see or click/);
+    expect(h.upserted).toEqual([]);
+  });
+
+  it('still pauses for the user in attach mode', async () => {
+    const h = makeHarness({ groundSucceeds: false });
+
+    await h.service.run('run-9', h.page, locationPlan, RESULTS_URL);
+
+    expect(h.events.some((e) => e.type === 'PAUSE' && e.message.includes('Lahore'))).toBe(true);
+  });
+
+  it('refuses to build a queue from the site home page', async () => {
+    // The home page's category grid looks exactly like a results grid to the detector.
+    const h = makeHarness({ startUrl: 'https://www.olx.com.pk/' });
+
+    await h.service.run('run-10', h.page, { ...locationPlan, steps: locationPlan.steps.slice(1) }, RESULTS_URL);
+
+    expect(h.events.some((e) => e.type === 'PAUSE' && e.message.includes('home page'))).toBe(true);
   });
 });
 
